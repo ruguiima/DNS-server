@@ -1,5 +1,12 @@
 #include "protocol.h"
-
+#include <string.h>
+#include <stdint.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+#else
+    #include <arpa/inet.h>
+#endif
 
 // 解析DNS查询包中的域名
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen) {
@@ -66,4 +73,16 @@ int build_dns_error_response(uint8_t* response, const uint8_t* request, int ques
     header->ancount = 0;
     // 4. 返回包长度（无应答区）
     return sizeof(DNSHeader) + question_len;
+}
+
+
+int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode) {
+    DNSHeader* header = (DNSHeader*)response;
+    header->id = htons(id);
+    header->flags = htons(DNS_FLAG_QR | DNS_FLAG_RA | (rcode & 0xF)); // QR=1, RA=1, RCODE
+    header->qdcount = htons(1);
+    header->ancount = 0;
+    header->nscount = 0;
+    header->arcount = 0;
+    return sizeof(DNSHeader);
 }

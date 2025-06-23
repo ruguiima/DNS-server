@@ -74,4 +74,7 @@ int build_dns_response(uint8_t* response, const uint8_t* request,
 int build_dns_error_response(uint8_t* response, const uint8_t* request,
                              int question_len, uint16_t rcode);
 
+
+//构造超时响应报文
+int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode);
 #endif /* DNS_PROTOCOL_H */
