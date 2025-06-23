@@ -3,7 +3,7 @@
 #include "table.h"
 #include "server.h"
 
-#define UPSTREAM_DNS_PORT 53
+#define MY_PORT 53
 #define UPSTREAM_DNS_IP "10.3.9.5"
 
 // 负责接收、解析、应答DNS查询
@@ -44,7 +44,7 @@ int start_dns_server(DNSRecord* initial_table) {
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(DNS_PORT);
+    server_addr.sin_port = htons(MY_PORT);
     if (bind(context.sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         print_debug_info("绑定套接字失败，请确保以管理员权限运行\n");
         closesocket(context.sock);
@@ -55,14 +55,14 @@ int start_dns_server(DNSRecord* initial_table) {
     // 配置上游DNS服务器地址
     memset(&context.upstream_addr, 0, sizeof(context.upstream_addr));
     context.upstream_addr.sin_family = AF_INET;
-    context.upstream_addr.sin_port = htons(UPSTREAM_DNS_PORT);
+    context.upstream_addr.sin_port = htons(DNS_PORT);
 #ifdef _WIN32
     context.upstream_addr.sin_addr.s_addr = inet_addr(UPSTREAM_DNS_IP);
 #else
     inet_pton(AF_INET, UPSTREAM_DNS_IP, &context.upstream_addr.sin_addr);
 #endif
 
-    print_debug_info("DNS服务器启动，监听端口 %d\n", DNS_PORT);
+    print_debug_info("DNS服务器启动，监听端口 %d\n", MY_PORT);
 
     fd_set readfds;
     int maxfd = (context.sock > context.upstream_sock ? context.sock : context.upstream_sock) + 1;
