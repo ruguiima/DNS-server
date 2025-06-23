@@ -1,12 +1,5 @@
 #include "protocol.h"
-#include <string.h>
-#include <stdint.h>
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-#else
-    #include <arpa/inet.h>
-#endif
+
 
 // 解析DNS查询包中的域名
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen) {

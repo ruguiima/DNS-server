@@ -1,28 +1,41 @@
 #include "table.h"
 #include "protocol.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-#else
-    #include <unistd.h>
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <arpa/inet.h>
-    #define SOCKET int
-    #define INVALID_SOCKET -1
-    #define closesocket close
-#endif
+#include "main.h"
+
+
+// 全局变量
+static RelayEntry *relay_table = NULL;  // ID映射表
+static uint16_t next_upstream_id = 1;   // 下一个可用的上游ID
+
 
 // 调试信息输出函数声明
 void print_debug_info(const char* format, ...);
 
+
+// 生成新的上游ID
+uint16_t generate_upstream_id() {
+    uint16_t id = next_upstream_id++;
+    if (next_upstream_id == 0) next_upstream_id = 1;  // 避免0
+    return id;
+}
+
+// 清理超时的映射记录
+void cleanup_expired_entries(time_t timeout) {
+    RelayEntry *entry, *tmp;
+    time_t now = time(NULL);
+    
+    HASH_ITER(hh, relay_table, entry, tmp) {
+        if (now - entry->timestamp > timeout) {
+            HASH_DEL(relay_table, entry);
+            free(entry);
+        }
+    }
+}
+
 // DNS服务器主循环，负责接收、解析、应答DNS查询
 int start_dns_server(DNSRecord* table) {
-    SOCKET sock;
-    struct sockaddr_in server_addr;
+    SOCKET sock, upstream_sock;
+    struct sockaddr_in server_addr, upstream_addr;
     uint8_t recv_buffer[MAX_DNS_PACKET_SIZE]; // 接收缓冲区
     uint8_t send_buffer[MAX_DNS_PACKET_SIZE]; // 发送缓冲区
     char domain[MAX_DOMAIN_LENGTH];           // 解析出的域名
@@ -39,6 +52,16 @@ int start_dns_server(DNSRecord* table) {
         print_debug_info("创建套接字失败\n");
         return -1;
     }
+
+    // 创建上游DNS服务器socket
+    upstream_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (upstream_sock == INVALID_SOCKET) {
+        print_debug_info("创建上游DNS套接字失败\n");
+        closesocket(sock);
+        return -1;
+    }
+
+
     // 绑定本地地址和端口
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -49,64 +72,136 @@ int start_dns_server(DNSRecord* table) {
         closesocket(sock);
         return -1;
     }
-    print_debug_info("DNS服务器启动，监听端口 %d\n", DNS_PORT);
-    // 主循环：不断接收和处理DNS查询
-    while (1) {
-        struct sockaddr_in client_addr;
-        int client_addr_len = sizeof(client_addr);
-        int recv_len, send_len, qname_len;
-        DNSHeader* header;
-        DNSRecord* record;
-        DNSQuestion* question;
-        // 接收DNS查询包
-        recv_len = recvfrom(sock, (char*)recv_buffer, sizeof(recv_buffer), 0,
-                           (struct sockaddr*)&client_addr, &client_addr_len);
-        if (recv_len < DNS_HEADER_SIZE) {
-            continue; // 包太短，丢弃
-        }
-        header = (DNSHeader*)recv_buffer;
 
-        if (ntohs(header->qdcount) != 1) {
-            continue;
-        }
-        // 解析域名
-        qname_len = parse_dns_name(recv_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
-        if (qname_len < 0) {
-            continue;
-        }
-        // 用结构体操作问题区
-        question = (DNSQuestion*)(recv_buffer + DNS_HEADER_SIZE + qname_len);
-        uint16_t qtype = ntohs(question->qtype);
-        uint16_t qclass = ntohs(question->qclass);
-        // 只处理A类型（IPv4）和IN类
-        if (qtype != DNS_TYPE_A || qclass != DNS_CLASS_IN) {
-            print_debug_info("收到非A类型或非IN类查询: %s, type=%u, class=%u\n", domain, qtype, qclass);
-            send_len = build_dns_error_response(send_buffer, recv_buffer, qname_len + sizeof(DNSQuestion), DNS_RCODE_NOT_IMPLEMENTED);
-            sendto(sock, (char*)send_buffer, send_len, 0,
-                   (struct sockaddr*)&client_addr, sizeof(client_addr));
-            continue;
-        }
-        print_debug_info("收到A类型查询: %s\n", domain);
-        // 查找域名对应的IP
-        HASH_FIND_STR(table, domain, record);
-        if (record && strcmp(record->ip, "0.0.0.0") != 0) {
-            print_debug_info("找到记录 %s -> %s\n", domain, record->ip);
-            if(strcmp(record->ip, "0.0.0.0") != 0) {
-                send_len = build_dns_response(send_buffer, recv_buffer, qname_len + sizeof(DNSQuestion), record->ip);
-            } else{
-                send_len = build_dns_error_response(send_buffer, recv_buffer, qname_len + sizeof(DNSQuestion), DNS_RCODE_NAME_ERROR);
+    // 设置上游DNS服务器地址
+    memset(&upstream_addr, 0, sizeof(upstream_addr));
+    upstream_addr.sin_family = AF_INET;
+    upstream_addr.sin_port = htons(UPSTREAM_DNS_PORT);
+    #ifdef _WIN32
+        upstream_addr.sin_addr.s_addr = inet_addr(UPSTREAM_DNS_IP);
+    #else
+        inet_pton(AF_INET, UPSTREAM_DNS_IP, &upstream_addr.sin_addr);
+    #endif
+
+
+    print_debug_info("DNS服务器启动，监听端口 %d\n", DNS_PORT);
+
+    // 主循环：不断接收和处理DNS查询
+    fd_set readfds;
+    int maxfd = (sock > upstream_sock ? sock : upstream_sock) + 1;
+
+    while (1) {
+        FD_ZERO(&readfds);
+        FD_SET(sock, &readfds);
+        FD_SET(upstream_sock, &readfds);
+
+        // 每60秒清理一次超时记录
+        cleanup_expired_entries(60);
+
+        int ret = select(maxfd, &readfds, NULL, NULL, NULL);
+        if (ret < 0) continue;
+
+        // 处理客户端请求
+        if (FD_ISSET(sock, &readfds)) {
+            struct sockaddr_in client_addr;
+            int client_addr_len = sizeof(client_addr);
+            int recv_len = recvfrom(sock, (char*)recv_buffer, sizeof(recv_buffer), 0,
+                                  (struct sockaddr*)&client_addr, &client_addr_len);
+
+            if (recv_len < DNS_HEADER_SIZE) {
+                continue;
             }
-        } else {
-            print_debug_info("未找到记录 %s\n", domain);
-            send_len = build_dns_error_response(send_buffer, recv_buffer, qname_len + sizeof(DNSQuestion), DNS_RCODE_NAME_ERROR);
+
+            DNSHeader* header = (DNSHeader*)recv_buffer;
+            if (ntohs(header->qdcount) != 1) {
+                continue;
+            }
+
+            int qname_len = parse_dns_name(recv_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
+            if (qname_len < 0) {
+                continue;
+            }
+
+            DNSQuestion* question = (DNSQuestion*)(recv_buffer + DNS_HEADER_SIZE + qname_len);
+            uint16_t qtype = ntohs(question->qtype);
+            uint16_t qclass = ntohs(question->qclass);
+
+            if (qtype != DNS_TYPE_A || qclass != DNS_CLASS_IN) {
+                print_debug_info("收到非A类型或非IN类查询: %s\n", domain);
+                int send_len = build_dns_error_response(send_buffer, recv_buffer, 
+                    qname_len + sizeof(DNSQuestion), DNS_RCODE_NOT_IMPLEMENTED);
+                sendto(sock, (char*)send_buffer, send_len, 0,
+                       (struct sockaddr*)&client_addr, sizeof(client_addr));
+                continue;
+            }
+            // 在本地表中查找
+            DNSRecord* record;
+            HASH_FIND_STR(table, domain, record);
+
+            if (record && strcmp(record->ip, "0.0.0.0") != 0) {
+                // 本地有记录，直接返回
+                print_debug_info("找到记录 %s -> %s\n", domain, record->ip);
+                int send_len = build_dns_response(send_buffer, recv_buffer, 
+                    qname_len + sizeof(DNSQuestion), record->ip);
+                sendto(sock, (char*)send_buffer, send_len, 0,
+                       (struct sockaddr*)&client_addr, sizeof(client_addr));
+            } else if (record && strcmp(record->ip, "0.0.0.0") == 0) {
+                // 域名被拦截
+                print_debug_info("域名被拦截 %s\n", domain);
+                int send_len = build_dns_error_response(send_buffer, recv_buffer,
+                    qname_len + sizeof(DNSQuestion), DNS_RCODE_NAME_ERROR);
+                sendto(sock, (char*)send_buffer, send_len, 0,
+                       (struct sockaddr*)&client_addr, sizeof(client_addr));
+            } else {
+                // 本地没有记录，转发到上游DNS
+                print_debug_info("转发查询到上游DNS: %s\n", domain);
+                uint16_t upstream_id = generate_upstream_id();
+                RelayEntry *entry = malloc(sizeof(RelayEntry));
+                if (entry) {
+                    entry->upstream_id = upstream_id;
+                    entry->client_id = ntohs(header->id);
+                    entry->client_addr = client_addr;
+                    entry->timestamp = time(NULL);
+                    HASH_ADD(hh, relay_table, upstream_id, sizeof(uint16_t), entry);
+
+                    // 修改请求ID并转发
+                    header->id = htons(upstream_id);
+                    sendto(upstream_sock, (char*)recv_buffer, recv_len, 0,
+                           (struct sockaddr*)&upstream_addr, sizeof(upstream_addr));
+                }
+            }
         }
-        sendto(sock, (char*)send_buffer, send_len, 0,
-               (struct sockaddr*)&client_addr, sizeof(client_addr));
+
+        // 处理上游DNS响应
+        if (FD_ISSET(upstream_sock, &readfds)) {
+            struct sockaddr_in from_addr;
+            socklen_t from_len = sizeof(from_addr);
+            int len = recvfrom(upstream_sock, (char*)send_buffer, sizeof(send_buffer), 0,
+                             (struct sockaddr*)&from_addr, &from_len);
+
+            if (len >= DNS_HEADER_SIZE) {
+                DNSHeader* header = (DNSHeader*)send_buffer;
+                uint16_t upstream_id = ntohs(header->id);
+                RelayEntry* entry = NULL;
+                HASH_FIND(hh, relay_table, &upstream_id, sizeof(uint16_t), entry);
+
+                if (entry) {
+                    // 恢复原始ID并转发给客户端
+                    header->id = htons(entry->client_id);
+                    sendto(sock, (char*)send_buffer, len, 0,
+                           (struct sockaddr*)&entry->client_addr, sizeof(entry->client_addr));
+                    HASH_DEL(relay_table, entry);
+                    free(entry);
+                }
+            }
+        }
     }
+
     closesocket(sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
+    closesocket(upstream_sock);
+    #ifdef _WIN32
+        WSACleanup();
+    #endif
     return 0;
 }
 
