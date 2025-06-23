@@ -12,6 +12,9 @@ static uint16_t next_upstream_id = 1;   // 下一个可用的上游ID
 #define UPSTREAM_DNS_IP "10.3.9.5"
 #define UPSTREAM_DNS_PORT 53
 
+#define RELAY_TIMEOUT 5  // 超时时间（秒）
+time_t last_cleanup = 0;
+
 // ID映射表结构定义
 typedef struct relay_entry {
     uint16_t upstream_id;           // 转发到上游的新ID
@@ -219,6 +222,24 @@ int start_dns_server(DNSRecord* table) {
                     free(entry);
                 }
             }
+        }
+
+        time_t now = time(NULL);
+        if (now - last_cleanup >= 1) { // 每1秒检查一次
+            RelayEntry *entry, *tmp;
+            HASH_ITER(hh, relay_table, entry, tmp) {
+                if (now - entry->timestamp > RELAY_TIMEOUT) {
+                    // 构造超时错误响应并发回客户端
+                    uint8_t timeout_buffer[MAX_DNS_PACKET_SIZE] = {0};
+                    int send_len = build_timeout_response(timeout_buffer, entry->client_id, 2); // 2=Server failure
+                    sendto(sock, (char*)timeout_buffer, send_len, 0,
+                        (struct sockaddr*)&entry->client_addr, sizeof(entry->client_addr));
+                    // 删除并释放
+                    HASH_DEL(relay_table, entry);
+                    free(entry);
+                }
+            }
+            last_cleanup = now;
         }
     }
 
