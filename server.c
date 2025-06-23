@@ -117,7 +117,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
     // ----------- 查询本地表 -----------
     // 在本地DNS表中查找域名
     DNSRecord* record;
-    HASH_FIND_STR(ctx->table, domain, record);
+    HASH_FIND_STR(ctx->dns_table, domain, record);
 
     if (record) {
         // 命中本地表，判断是否为拦截（0.0.0.0）

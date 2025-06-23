@@ -2,21 +2,34 @@
 #include "util.h"
 #include "table.h"
 #include "server.h"
+#include <signal.h>
 
 #define MY_PORT 53
 #define UPSTREAM_DNS_IP "10.3.9.5"
 
-// 负责接收、解析、应答DNS查询
-int start_dns_server(DNSRecord* initial_table) {
-    DNSContext context = {0}; // 初始化上下文
-    context.table = initial_table;
-    context.relay_table = NULL;
-    context.upstream_id_counter = 0;
+// 增加全局退出标志
+static volatile sig_atomic_t g_exit_flag = 0;
 
-    struct sockaddr_in server_addr;
-    uint8_t recv_buffer[MAX_DNS_PACKET_SIZE];
-    uint8_t upstream_recv_buffer[MAX_DNS_PACKET_SIZE];
+// 资源释放函数
+void free_dns_context(DNSContext *ctx) {
+    if (!ctx) return;
+    closesocket(ctx->sock);
+    closesocket(ctx->upstream_sock);
+#ifdef _WIN32
+    WSACleanup();
+#endif
+    free_relay_table(ctx->relay_table);
+    free_dns_table(ctx->dns_table);
+}
 
+// SIGINT信号处理函数
+void handle_sigint(int sig) {
+    print_debug_info("收到SIGINT，准备退出...\n");
+    g_exit_flag = 1;
+}
+
+// 负责启动DNS查询
+int start_dns_server(DNSContext *context) {
 #ifdef _WIN32
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -25,18 +38,20 @@ int start_dns_server(DNSRecord* initial_table) {
     }
 #endif
 
+    struct sockaddr_in server_addr;
+
     // 创建本地监听UDP套接字
-    context.sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (context.sock == INVALID_SOCKET) {
+    context->sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (context->sock == INVALID_SOCKET) {
         print_debug_info("创建本地套接字失败\n");
         return -1;
     }
 
     // 创建上游DNS通信UDP套接字
-    context.upstream_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (context.upstream_sock == INVALID_SOCKET) {
+    context->upstream_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (context->upstream_sock == INVALID_SOCKET) {
         print_debug_info("创建上游DNS套接字失败\n");
-        closesocket(context.sock);
+        closesocket(context->sock);
         return -1;
     }
 
@@ -45,30 +60,58 @@ int start_dns_server(DNSRecord* initial_table) {
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(MY_PORT);
-    if (bind(context.sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (bind(context->sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
         print_debug_info("绑定套接字失败，请确保以管理员权限运行\n");
-        closesocket(context.sock);
-        closesocket(context.upstream_sock);
+        closesocket(context->sock);
+        closesocket(context->upstream_sock);
         return -1;
     }
 
     // 配置上游DNS服务器地址
-    memset(&context.upstream_addr, 0, sizeof(context.upstream_addr));
-    context.upstream_addr.sin_family = AF_INET;
-    context.upstream_addr.sin_port = htons(DNS_PORT);
+    memset(&context->upstream_addr, 0, sizeof(context->upstream_addr));
+    context->upstream_addr.sin_family = AF_INET;
+    context->upstream_addr.sin_port = htons(DNS_PORT);
 #ifdef _WIN32
-    context.upstream_addr.sin_addr.s_addr = inet_addr(UPSTREAM_DNS_IP);
+    context->upstream_addr.sin_addr.s_addr = inet_addr(UPSTREAM_DNS_IP);
 #else
-    inet_pton(AF_INET, UPSTREAM_DNS_IP, &context.upstream_addr.sin_addr);
+    inet_pton(AF_INET, UPSTREAM_DNS_IP, &context->upstream_addr.sin_addr);
 #endif
 
     print_debug_info("DNS服务器启动，监听端口 %d\n", MY_PORT);
+    return 0;
+}
+
+// ======================= 程序入口 =======================
+// 负责加载表、启动服务器、释放资源
+int main(int argc, char* argv[]) {
+
+    DNSContext context = {0}; // 初始化上下文
+    context.dns_table = NULL;
+    context.relay_table = NULL;
+    context.upstream_id_counter = 0;
+
+    signal(SIGINT, handle_sigint);
+
+    const char* filename = "dnsrelay.txt";
+    // 加载本地DNS表
+    if (load_dns_table(filename, &context.dns_table) < 0) {
+        return 1;
+    }
+    
+
+    if (start_dns_server(&context) < 0) {
+        free_dns_context(&context);
+        return 1;
+    }
+
+    uint8_t recv_buffer[MAX_DNS_PACKET_SIZE];
+    uint8_t upstream_recv_buffer[MAX_DNS_PACKET_SIZE];
 
     fd_set readfds;
     int maxfd = (context.sock > context.upstream_sock ? context.sock : context.upstream_sock) + 1;
 
     // ======================= 主循环 =======================
-    while (1) {
+    while (!g_exit_flag) {
         FD_ZERO(&readfds);
         FD_SET(context.sock, &readfds);
         FD_SET(context.upstream_sock, &readfds);
@@ -112,33 +155,9 @@ int start_dns_server(DNSRecord* initial_table) {
             }
         }
     }
-
+    print_debug_info("退出主循环，释放所有资源...\n");
     // 关闭套接字，清理资源
-    closesocket(context.sock);
-    closesocket(context.upstream_sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
-    free_relay_table(context.relay_table);
-    return 0;
-}
-
-// ======================= 程序入口 =======================
-// 负责加载表、启动服务器、释放资源
-int main(int argc, char* argv[]) {
-    DNSRecord* table = NULL;
-    const char* filename = "dnsrelay.txt";
-    
-    // 加载本地DNS表
-    if (load_dns_table(filename, &table) < 0) {
-        return 1;
-    }
-    
-    // 启动DNS服务器主循环
-    start_dns_server(table);
-    
-    // 程序退出前释放本地DNS表内存
-    free_dns_table(table);
+    free_dns_context(&context);
     return 0;
 }
 

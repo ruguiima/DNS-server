@@ -11,7 +11,7 @@ typedef struct {
     int sock;                       // 本地监听套接字
     int upstream_sock;              // 上游通信套接字
     struct sockaddr_in upstream_addr; // 上游服务器地址
-    DNSRecord *table;               // 本地DNS记录表
+    DNSRecord *dns_table;               // 本地DNS记录表
     RelayEntry *relay_table;        // 转发请求记录表
     uint16_t upstream_id_counter;   // 用于生成唯一上游请求ID的计数器
 } DNSContext;
