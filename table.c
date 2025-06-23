@@ -54,3 +54,11 @@ void free_dns_table(DNSRecord* table) {
         free(current);
     }
 }
+
+void free_relay_table(RelayEntry* table) {
+    RelayEntry *current, *tmp;
+    HASH_ITER(hh, table, current, tmp) {
+        HASH_DEL(table, current);
+        free(current);
+    }
+}

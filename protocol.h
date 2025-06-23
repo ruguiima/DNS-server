@@ -7,7 +7,13 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
 #else
+    #include <unistd.h>
+    #include <sys/socket.h>
+    #include <netinet/in.h>
     #include <arpa/inet.h>
+    #define SOCKET int
+    #define INVALID_SOCKET -1
+    #define closesocket close
 #endif
 
 
@@ -51,9 +57,10 @@ typedef struct dns_rr {
 #pragma pack(pop)
 
 // DNS响应码
-#define DNS_RCODE_NO_ERROR 0      // 没有错误
-#define DNS_RCODE_NAME_ERROR 3    // 域名不存在
-#define DNS_RCODE_NOT_IMPLEMENTED 4 // 未实现的查询类型
+#define DNS_RCODE_NO_ERROR 0
+#define DNS_RCODE_SERVER_FAILURE 2
+#define DNS_RCODE_NAME_ERROR 3
+#define DNS_RCODE_NOT_IMPLEMENTED 4
 
 // DNS标志位
 #define DNS_FLAG_QR 0x8000        // 查询/响应标志，1为响应
