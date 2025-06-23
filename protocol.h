@@ -46,13 +46,13 @@ typedef struct dns_question {
 
 // DNS资源记录结构体
 typedef struct dns_rr {
-    // 域名部分需单独处理
+    uint16_t name;    // 资源记录名称（通常是域名，使用压缩指针）
     uint16_t type;     // 记录类型
     uint16_t class;    // 记录类
     uint32_t ttl;      // 生存时间
     uint16_t rdlength; // 资源数据长度
     uint8_t  rdata[4]; // 资源数据（这里只考虑A记录，IPv4地址4字节）
-} DNSResourceRecord;
+} DNS_RR;
 
 #pragma pack(pop)
 
@@ -62,29 +62,16 @@ typedef struct dns_rr {
 #define DNS_RCODE_NAME_ERROR 3
 #define DNS_RCODE_NOT_IMPLEMENTED 4
 
-// DNS标志位
-#define DNS_FLAG_QR 0x8000        // 查询/响应标志，1为响应
-#define DNS_FLAG_AA 0x0400        // 授权回答
-#define DNS_FLAG_TC 0x0200        // 可截断的
-#define DNS_FLAG_RD 0x0100        // 期望递归
-#define DNS_FLAG_RA 0x0080        // 可用递归
-#define DNS_FLAG_RCODE 0x000F     // 响应码掩码
-
 // DNS记录类型
 #define DNS_TYPE_A 1             // IPv4地址记录
 #define DNS_TYPE_AAAA 28         // IPv6地址记录
 #define DNS_CLASS_IN 1           // Internet类
 
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen);
-int build_dns_response(uint8_t* response, const uint8_t* request, 
+int build_standard_dns_response(uint8_t* response, const uint8_t* request, 
                        int question_len, const char* ip);
 // 构造DNS查询失败响应包（如Name Error等）
 int build_dns_error_response(uint8_t* response, const uint8_t* request,
                              int question_len, uint16_t rcode);
 
-
-//构造超时响应报文
-int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode);
-//构造空响应报文
-int build_dns_empty_response(uint8_t* response, const uint8_t* request, int question_len);
 #endif /* DNS_PROTOCOL_H */

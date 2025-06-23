@@ -21,72 +21,37 @@ int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen) {
 }
 
 // 构造DNS响应包
-int build_dns_response(uint8_t* response, const uint8_t* request, 
+int build_standard_dns_response(uint8_t* response, const uint8_t* request, 
                        int question_len, const char* ip) {
     DNSHeader* header;
-    uint8_t* ptr;
     uint32_t ip_addr;
     // 1. 复制请求包头
     memcpy(response, request, sizeof(DNSHeader));
     // 2. 复制原始问题区
     memcpy(response + sizeof(DNSHeader), request + sizeof(DNSHeader), question_len);
-    ptr = response + sizeof(DNSHeader) + question_len;
     // 3. 设置flags
     header = (DNSHeader*)response;
-    header->flags &= htons(~(DNS_FLAG_QR | DNS_FLAG_AA | DNS_FLAG_RA | DNS_FLAG_RCODE));
-    header->flags |= htons(DNS_FLAG_QR | DNS_FLAG_AA | DNS_FLAG_RA);
-
-    header->flags |= htons(DNS_RCODE_NO_ERROR);
+    header->flags = htons(0x8180);
     header->ancount = htons(1);
     // 5. 构造资源记录（A记录）
+    DNS_RR* rr = (DNS_RR*)(response + sizeof(DNSHeader) + question_len);
     // 回答区域名（压缩指针）
-    *ptr++ = 0xC0; *ptr++ = 0x0C;
-    DNSResourceRecord* rr = (DNSResourceRecord*)ptr;
+    rr->name = htons(0xC00C);
     rr->type = htons(DNS_TYPE_A);
     rr->class = htons(DNS_CLASS_IN);
     rr->ttl = htonl(300);
     rr->rdlength = htons(4);
     inet_pton(AF_INET, ip, rr->rdata);
-    ptr += sizeof(DNSResourceRecord);
-    return ptr - response;
+    return sizeof(DNSHeader) + question_len + sizeof(DNS_RR); // 返回包长度
 }
 
 // 构造DNS错误响应包，rcode为响应码
 int build_dns_error_response(uint8_t* response, const uint8_t* request, 
                              int question_len, uint16_t rcode) {
     DNSHeader* header = (DNSHeader*)response;
-    // 1. 复制请求包头
     memcpy(response, request, sizeof(DNSHeader));
-    // 2. 复制原始问题区
     memcpy(response + sizeof(DNSHeader), request + sizeof(DNSHeader), question_len);
-    // 3. 设置flags
-    header->flags &= htons(~(DNS_FLAG_QR | DNS_FLAG_AA | DNS_FLAG_RA | DNS_FLAG_RCODE));
-    header->flags |= htons(DNS_FLAG_QR | DNS_FLAG_AA | DNS_FLAG_RA);
-    header->flags |= htons(rcode);
+    header->flags = htons(0x8180 | rcode);
     header->ancount = 0;
-    // 4. 返回包长度（无应答区）
     return sizeof(DNSHeader) + question_len;
-}
-
-
-int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode) {
-    DNSHeader* header = (DNSHeader*)response;
-    header->id = htons(id);
-    header->flags = htons(DNS_FLAG_QR | DNS_FLAG_RA | (rcode & 0xF)); // QR=1, RA=1, RCODE
-    header->qdcount = htons(1);
-    header->ancount = 0;
-    header->nscount = 0;
-    header->arcount = 0;
-    return sizeof(DNSHeader);
-}
-
-// 构造无答案的DNS响应（RCODE=0, ANCOUNT=0）
-int build_dns_empty_response(uint8_t* response, const uint8_t* request, int question_len) {
-    memcpy(response, request, question_len); // 拷贝header+question
-    DNSHeader* header = (DNSHeader*)response;
-    header->flags = htons(0x8180); // 标准响应，无错误
-    header->ancount = htons(0);    // 无答案
-    header->nscount = 0;
-    header->arcount = 0;
-    return question_len;
 }

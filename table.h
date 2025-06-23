@@ -23,6 +23,8 @@ typedef struct relay_entry {
     uint16_t upstream_id;           // 转发到上游的新ID
     uint16_t client_id;            // 客户端原始ID
     struct sockaddr_in client_addr; // 客户端地址
+    uint8_t query[512];         // 查询数据缓冲区
+    int question_len;                 // 查询数据长度
     struct timeval timestamp;              // 时间戳，用于超时处理
     UT_hash_handle hh;             // uthash处理句柄
 } RelayEntry;

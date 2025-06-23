@@ -21,7 +21,7 @@ void handle_timed_out_requests(DNSContext *ctx) {
                              entry->upstream_id, entry->client_id);
             
             uint8_t timeout_buffer[MAX_DNS_PACKET_SIZE] = {0};
-            int send_len = build_timeout_response(timeout_buffer, entry->client_id, DNS_RCODE_SERVER_FAILURE);
+            int send_len = build_dns_error_response(timeout_buffer, entry->query, entry->question_len, DNS_RCODE_SERVER_FAILURE);
             sendto(ctx->sock, (char*)timeout_buffer, send_len, 0,
                    (struct sockaddr*)&entry->client_addr, sizeof(entry->client_addr));
 
@@ -38,7 +38,8 @@ void handle_timed_out_requests(DNSContext *ctx) {
  * @param query_len 查询的长度。
  * @param client_addr 原始客户端的地址信息。
  */
-void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int query_len, struct sockaddr_in client_addr) {
+void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int query_len, 
+                               int question_section_len, struct sockaddr_in client_addr) {
     RelayEntry *entry = malloc(sizeof(RelayEntry));
     if (!entry) {
         print_debug_info("分配RelayEntry失败，无法转发查询\n");
@@ -50,8 +51,9 @@ void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int
     entry->upstream_id = ++(ctx->upstream_id_counter);
     entry->client_id = ntohs(header->id);
     entry->client_addr = client_addr;
+    memcpy(entry->query, query_buffer, query_len);
+    entry->question_len = question_section_len;
     get_now(&entry->timestamp);
-    
     HASH_ADD(hh, ctx->relay_table, upstream_id, sizeof(uint16_t), entry);
     
     // 创建一个副本进行修改，避免污染原始的接收缓冲区
@@ -70,7 +72,8 @@ void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int
  * @param query_buffer 包含查询数据的缓冲区。
  * @param query_len 查询数据的长度。
  */
-void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_t *query_buffer, int query_len) {
+void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, 
+                         uint8_t *query_buffer, int query_len) {
     char domain[256]; // 将domain作为局部变量
     uint8_t response_buffer[MAX_DNS_PACKET_SIZE]; // 用于发送响应的独立缓冲区
 
@@ -126,19 +129,19 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_
             // 命中A记录，直接返回本地IP
             if (is_a) {
                 print_debug_info("找到记录 %s -> %s\n", domain, record->ip);
-                int send_len = build_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
+                int send_len = build_standard_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
                 sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
             } else {
                 // 有A记录但收到AAAA查询，返回空应答
                 print_debug_info("本地表有A记录，对AAAA查询返回空应答: %s\n", domain);
-                int send_len = build_dns_empty_response(response_buffer, query_buffer, question_section_len);
+                int send_len = build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NO_ERROR);
                 sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
             }
         }
     } else {
         // 未命中本地表，转发到上游DNS服务器
         print_debug_info("转发%s查询到上游DNS: %s\n", is_a ? "A" : "AAAA", domain);
-        forward_query_to_upstream(ctx, query_buffer, query_len, client_addr);
+        forward_query_to_upstream(ctx, query_buffer, query_len, question_section_len, client_addr);
     }
 }
 

@@ -17,6 +17,9 @@ typedef struct {
 } DNSContext;
 
 void handle_timed_out_requests(DNSContext *ctx);
-void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int query_len, struct sockaddr_in client_addr);
+void forward_query_to_upstream(DNSContext *ctx, const uint8_t* query_buffer, int query_len, 
+                               int question_section_len, struct sockaddr_in client_addr);
+
 void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int response_len);
-void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_t *query_buffer, int query_len);
+void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, 
+                         uint8_t *query_buffer, int query_len);
