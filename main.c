@@ -3,11 +3,6 @@
 #include "main.h"
 
 
-// 全局变量
-static RelayEntry *relay_table = NULL;  // ID映射表
-static uint16_t next_upstream_id = 1;   // 下一个可用的上游ID
-
-
 // 上游DNS服务器配置
 #define UPSTREAM_DNS_IP "10.3.9.5"
 #define UPSTREAM_DNS_PORT 53
