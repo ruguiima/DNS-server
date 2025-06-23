@@ -4,7 +4,7 @@
 #include "server.h"
 
 #define MY_PORT 53
-#define UPSTREAM_DNS_IP "10."
+#define UPSTREAM_DNS_IP "10.3.9.5"
 
 // 负责接收、解析、应答DNS查询
 int start_dns_server(DNSRecord* initial_table) {
