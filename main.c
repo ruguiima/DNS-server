@@ -1,22 +1,11 @@
 #include "table.h"
 #include "protocol.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
+#include "main.h"
 
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-#else
-    #include <unistd.h>
-    #include <sys/socket.h>
-    #include <netinet/in.h>
-    #include <arpa/inet.h>
-    #define SOCKET int
-    #define INVALID_SOCKET -1
-    #define closesocket close
-#endif
+
+// 全局变量
+static RelayEntry *relay_table = NULL;  // ID映射表
+static uint16_t next_upstream_id = 1;   // 下一个可用的上游ID
 
 
 // 上游DNS服务器配置
@@ -106,7 +95,6 @@ int start_dns_server(DNSRecord* table) {
         closesocket(sock);
         return -1;
     }
-    print_debug_info("DNS服务器启动，监听端口 %d\n", DNS_PORT);
 
     // 设置上游DNS服务器地址
     memset(&upstream_addr, 0, sizeof(upstream_addr));
@@ -118,14 +106,14 @@ int start_dns_server(DNSRecord* table) {
         inet_pton(AF_INET, UPSTREAM_DNS_IP, &upstream_addr.sin_addr);
     #endif
 
+
     print_debug_info("DNS服务器启动，监听端口 %d\n", DNS_PORT);
 
-
-
-    // 主循环：不断接收和处理DNS查询
+    
     fd_set readfds;
     int maxfd = (sock > upstream_sock ? sock : upstream_sock) + 1;
 
+    // 主循环：不断接收和处理DNS查询
     while (1) {
         FD_ZERO(&readfds);
         FD_SET(sock, &readfds);
