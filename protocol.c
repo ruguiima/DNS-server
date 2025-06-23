@@ -1,12 +1,4 @@
 #include "protocol.h"
-#include <string.h>
-#include <stdint.h>
-#ifdef _WIN32
-    #include <winsock2.h>
-    #include <ws2tcpip.h>
-#else
-    #include <arpa/inet.h>
-#endif
 
 // 解析DNS查询包中的域名
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen) {
@@ -60,7 +52,8 @@ int build_dns_response(uint8_t* response, const uint8_t* request,
 }
 
 // 构造DNS错误响应包，rcode为响应码
-int build_dns_error_response(uint8_t* response, const uint8_t* request, int question_len, uint16_t rcode) {
+int build_dns_error_response(uint8_t* response, const uint8_t* request, 
+                             int question_len, uint16_t rcode) {
     DNSHeader* header = (DNSHeader*)response;
     // 1. 复制请求包头
     memcpy(response, request, sizeof(DNSHeader));
@@ -85,4 +78,15 @@ int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode) {
     header->nscount = 0;
     header->arcount = 0;
     return sizeof(DNSHeader);
+}
+
+// 构造无答案的DNS响应（RCODE=0, ANCOUNT=0）
+int build_dns_empty_response(uint8_t* response, const uint8_t* request, int question_len) {
+    memcpy(response, request, question_len); // 拷贝header+question
+    DNSHeader* header = (DNSHeader*)response;
+    header->flags = htons(0x8180); // 标准响应，无错误
+    header->ancount = htons(0);    // 无答案
+    header->nscount = 0;
+    header->arcount = 0;
+    return question_len;
 }

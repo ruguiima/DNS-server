@@ -65,6 +65,7 @@ typedef struct dns_rr {
 
 // DNS记录类型
 #define DNS_TYPE_A 1             // IPv4地址记录
+#define DNS_TYPE_AAAA 28         // IPv6地址记录
 #define DNS_CLASS_IN 1           // Internet类
 
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen);
@@ -77,4 +78,6 @@ int build_dns_error_response(uint8_t* response, const uint8_t* request,
 
 //构造超时响应报文
 int build_timeout_response(uint8_t* response, uint16_t id, uint16_t rcode);
+//构造空响应报文
+int build_dns_empty_response(uint8_t* response, const uint8_t* request, int question_len);
 #endif /* DNS_PROTOCOL_H */
