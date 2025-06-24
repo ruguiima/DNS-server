@@ -142,8 +142,8 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
             sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
             return;
         }
-
     } 
+    // ----------- 查询缓存 -----------
     record = cache_find(&ctx->cache, domain, qtype);
     if(record){
 
@@ -166,36 +166,49 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
 }
 
 
-// ----------- 查询缓存 -----------
+// ----------- 更新缓存 -----------
 void update_cache(DNSContext *ctx, uint8_t *response_buffer) {
-    // 从响应中解析域名和查询类型
-    char domain[256] = "";
-    int qname_len = parse_dns_name(response_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
-    DNSQuestion* question = (DNSQuestion*)(response_buffer + DNS_HEADER_SIZE + qname_len);
-    uint16_t qtype = ntohs(question->qtype);
+    int ancount = ntohs(((DNSHeader*)response_buffer)->ancount);
+    if (ancount <= 0) return;
 
-    if (qname_len > 0 && (qtype == DNS_TYPE_A || qtype == DNS_TYPE_AAAA)) {
-        // 解析IP
-        int ancount = ntohs(((DNSHeader*)response_buffer)->ancount);
-        if (ancount > 0) {
-            // 定位到第一个answer
-            int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
-            DNS_RR* rr = (DNS_RR*)(response_buffer + offset);
-
-            //更新对应类型的缓存
-            if (rr->type == htons(DNS_TYPE_A) && rr->rdlength == htons(4)) {
-                char ip[16];
-                inet_ntop(AF_INET, response_buffer + offset + sizeof(DNS_RR), ip, sizeof(ip));
-                cache_insert(&ctx->cache, domain, DNS_TYPE_A, ip);
-            } else if(rr->type == htons(DNS_TYPE_AAAA) && rr->rdlength == htons(16)){
-                char ip[46]; // IPv6地址字符串
-                inet_ntop(AF_INET6, response_buffer + offset + sizeof(DNS_RR), ip, sizeof(ip));
-                cache_insert(&ctx->cache, domain, DNS_TYPE_AAAA, ip);
-            } else {
-                print_debug_info("未知类型或长度的资源记录: type=%u, rdlength=%u\n", ntohs(rr->type), ntohs(rr->rdlength));
-            }
+    // 先解析问题区，得到qname_len，跳过问题区
+    char q_domain[256] = "";
+    int qname_len = parse_dns_name(response_buffer, DNS_HEADER_SIZE, q_domain, sizeof(q_domain));
+    if (qname_len < 0) {
+        print_debug_info("update_cache: 问题区域名解析失败\n");
+        return;
+    }
+    int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
+    for(int i = 0; i < ancount; i++){
+        char rr_domain[256] = "";
+        int rr_name_len = parse_dns_name(response_buffer, offset, rr_domain, sizeof(rr_domain));
+        if (rr_name_len < 0) {
+            print_debug_info("update_cache: 回答区域名解析失败\n");
+            return;
         }
-    }  
+        DNS_RR* rr = (DNS_RR*)(response_buffer + offset + rr_name_len);
+
+        uint16_t type = ntohs(rr->type);
+        uint16_t rdlength = ntohs(rr->rdlength);
+        const uint8_t* rdata = response_buffer + offset + rr_name_len + sizeof(DNS_RR);
+
+        if (type == DNS_TYPE_A && rdlength == 4) {
+            char ip[16];
+            inet_ntop(AF_INET, rdata, ip, sizeof(ip));
+            print_debug_info("缓存插入A记录: %s -> %s\n", q_domain, ip);
+            cache_insert(&ctx->cache, q_domain, DNS_TYPE_A, ip);
+            return;
+        } else if (type == DNS_TYPE_AAAA && rdlength == 16) {
+            char ip[46];
+            inet_ntop(AF_INET6, rdata, ip, sizeof(ip));
+            print_debug_info("缓存插入AAAA记录: %s -> %s\n", q_domain, ip);
+            cache_insert(&ctx->cache, q_domain, DNS_TYPE_AAAA, ip);
+            return;
+        } 
+        print_debug_info("update_cache: 不支持的记录类型或长度不匹配，type=%u, rdlength=%u\n", type, rdlength);
+        offset += rr_name_len + sizeof(DNS_RR) + rdlength; // 移动到下一个记录
+    }
+    
 }
 
 /**

@@ -46,7 +46,6 @@ typedef struct dns_question {
 
 // DNS资源记录结构体
 typedef struct dns_rr {
-    uint16_t name;    // 资源记录名称（通常是域名，使用压缩指针）
     uint16_t type;     // 记录类型
     uint16_t class;    // 记录类
     uint32_t ttl;      // 生存时间
