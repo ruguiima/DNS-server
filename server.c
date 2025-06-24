@@ -1,3 +1,4 @@
+#include "cache.h"
 #include "table.h"
 #include "protocol.h"
 #include "util.h"
@@ -118,6 +119,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
     // 在本地DNS表中查找域名
     DNSRecord* record;
     HASH_FIND_STR(ctx->dns_table, domain, record);
+    if(!record) record = cache_find(&ctx->cache, domain);
 
     if (record) {
         // 命中本地表，判断是否为拦截（0.0.0.0）
@@ -139,7 +141,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
             }
         }
     } else {
-        // 未命中本地表，转发到上游DNS服务器
+        // 未命中，转发到上游DNS服务器
         print_debug_info("转发%s查询到上游DNS: %s\n", is_a ? "A" : "AAAA", domain);
         forward_query_to_upstream(ctx, query_buffer, query_len, question_section_len, client_addr);
     }
@@ -167,6 +169,27 @@ void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int res
 
     if (entry) {
         // 找到对应的转发请求，恢复原始客户端ID并转发响应
+        // 解析域名（只处理A记录缓存）
+        char domain[256] = "";
+        int qname_len = parse_dns_name(response_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
+        DNSQuestion* question = (DNSQuestion*)(response_buffer + DNS_HEADER_SIZE + qname_len);
+        uint16_t qtype = ntohs(question->qtype);
+        if (qname_len > 0 && qtype == DNS_TYPE_A) {
+            // 只缓存A记录的正向解析
+            // 解析IP
+            int ancount = ntohs(((DNSHeader*)response_buffer)->ancount);
+            if (ancount > 0) {
+                // 定位到第一个answer
+                int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
+                DNS_RR* rr = (DNS_RR*)(response_buffer + offset);
+                if (rr->type == htons(DNS_TYPE_A) && rr->rdlength == htons(4)) {
+                    char ip[16];
+                    snprintf(ip, sizeof(ip), "%u.%u.%u.%u", rr->rdata[0], rr->rdata[1], rr->rdata[2], rr->rdata[3]);
+                    cache_insert(&ctx->cache, domain, ip);
+                }
+            }
+        }
+        // 找到对应的转发请求，恢复原始客户端ID并转发响应
         print_debug_info("收到上游响应，转发给客户端，upstream_id=%u, client_id=%u\n", resp_upstream_id, entry->client_id);
         header->id = htons(entry->client_id);
         sendto(ctx->sock, (char*)response_buffer, response_len, 0,
@@ -180,3 +203,4 @@ void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int res
         print_debug_info("未找到对应的RelayEntry, upstream_id=%u，丢弃响应\n", resp_upstream_id);
     }
 }
+

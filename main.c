@@ -1,11 +1,13 @@
 #include "protocol.h"
 #include "util.h"
 #include "table.h"
+#include "cache.h"
 #include "server.h"
 #include <signal.h>
 
 #define MY_PORT 53
 #define UPSTREAM_DNS_IP "10.3.9.5"
+#define CACHE_CAPACITY 256
 
 // 增加全局退出标志
 static volatile sig_atomic_t g_exit_flag = 0;
@@ -20,6 +22,7 @@ void free_dns_context(DNSContext *ctx) {
 #endif
     free_relay_table(ctx->relay_table);
     free_dns_table(ctx->dns_table);
+    cache_free(&ctx->cache);
 }
 
 // SIGINT信号处理函数
@@ -89,6 +92,8 @@ int main(int argc, char* argv[]) {
     context.dns_table = NULL;
     context.relay_table = NULL;
     context.upstream_id_counter = 0;
+    // 初始化LRU缓存
+    cache_init(&context.cache, CACHE_CAPACITY);
 
     signal(SIGINT, handle_sigint);
 
