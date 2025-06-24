@@ -51,7 +51,6 @@ typedef struct dns_rr {
     uint16_t class;    // 记录类
     uint32_t ttl;      // 生存时间
     uint16_t rdlength; // 资源数据长度
-    uint8_t  rdata[4]; // 资源数据（这里只考虑A记录，IPv4地址4字节）
 } DNS_RR;
 
 #pragma pack(pop)
@@ -70,6 +69,8 @@ typedef struct dns_rr {
 int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen);
 int build_standard_dns_response(uint8_t* response, const uint8_t* request, 
                        int question_len, const char* ip);
+int build_ipv6_dns_response(uint8_t* response, const uint8_t* request, 
+                             int question_len, const char* ip);
 // 构造DNS查询失败响应包（如Name Error等）
 int build_dns_error_response(uint8_t* response, const uint8_t* request,
                              int question_len, uint16_t rcode);

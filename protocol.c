@@ -20,7 +20,7 @@ int parse_dns_name(const uint8_t* data, int offset, char* domain, int maxlen) {
     return i + 1; // 返回处理的字节数
 }
 
-// 构造DNS响应包
+// 构造ipv4 DNS响应包
 int build_standard_dns_response(uint8_t* response, const uint8_t* request, 
                        int question_len, const char* ip) {
     DNSHeader* header;
@@ -41,8 +41,32 @@ int build_standard_dns_response(uint8_t* response, const uint8_t* request,
     rr->class = htons(DNS_CLASS_IN);
     rr->ttl = htonl(300);
     rr->rdlength = htons(4);
-    inet_pton(AF_INET, ip, rr->rdata);
-    return sizeof(DNSHeader) + question_len + sizeof(DNS_RR); // 返回包长度
+    inet_pton(AF_INET, ip, (uint8_t*)rr + sizeof(DNS_RR));
+    return sizeof(DNSHeader) + question_len + sizeof(DNS_RR) + 4; // 返回包长度
+}
+
+// 构造IPv6 DNS响应包
+int build_ipv6_dns_response(uint8_t* response, const uint8_t* request, 
+                             int question_len, const char* ip) {
+    DNSHeader* header;
+    // 1. 复制请求包头
+    memcpy(response, request, sizeof(DNSHeader));
+    // 2. 复制原始问题区
+    memcpy(response + sizeof(DNSHeader), request + sizeof(DNSHeader), question_len);
+    // 3. 设置flags
+    header = (DNSHeader*)response;
+    header->flags = htons(0x8180);
+    header->ancount = htons(1);
+    // 5. 构造资源记录（AAAA记录）
+    DNS_RR* rr = (DNS_RR*)(response + sizeof(DNSHeader) + question_len);
+    // 回答区域名（压缩指针）
+    rr->name = htons(0xC00C);
+    rr->type = htons(DNS_TYPE_AAAA);
+    rr->class = htons(DNS_CLASS_IN);
+    rr->ttl = htonl(300);
+    rr->rdlength = htons(16);
+    inet_pton(AF_INET6, ip, (uint8_t*)rr + sizeof(DNS_RR));
+    return sizeof(DNSHeader) + question_len + sizeof(DNS_RR) + 16; // 返回包长度
 }
 
 // 构造DNS错误响应包，rcode为响应码
@@ -55,3 +79,4 @@ int build_dns_error_response(uint8_t* response, const uint8_t* request,
     header->ancount = 0;
     return sizeof(DNSHeader) + question_len;
 }
+

@@ -13,8 +13,9 @@
 
 // DNS记录结构，用于哈希表存储
 typedef struct dns_record {
-    char domain[256];     // 域名(键)
-    char ip[16];         // IP地址字符串
+    char domain[260];     // 域名(键)
+    uint16_t type;       // 查询类型（A、AAAA等）
+    char ip[46];         // IPv4/v6地址字符串
     UT_hash_handle hh;   // uthash处理句柄
 } DNSRecord;
 

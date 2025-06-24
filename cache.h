@@ -12,9 +12,11 @@ typedef struct {
 // 初始化缓存
 void cache_init(DNSCache *cache, int cap);
 // 查询缓存，命中则移动到表尾
-DNSRecord *cache_find(DNSCache *cache, const char *domain);
+DNSRecord *cache_find(DNSCache *cache, const char *domain, 
+                      const uint16_t type);
 // 插入缓存，自动淘汰最旧
-void cache_insert(DNSCache *cache, const char *domain, const char *ip);
+void cache_insert(DNSCache *cache, const char *domain, 
+                  const uint16_t type, const char *ip);
 // 释放缓存
 void cache_free(DNSCache *cache);
 #endif /* CACHE_H */

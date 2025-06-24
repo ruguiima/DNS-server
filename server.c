@@ -119,7 +119,6 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
     // 在本地DNS表中查找域名
     DNSRecord* record;
     HASH_FIND_STR(ctx->dns_table, domain, record);
-    if(!record) record = cache_find(&ctx->cache, domain);
 
     if (record) {
         // 命中本地表，判断是否为拦截（0.0.0.0）
@@ -127,24 +126,76 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr,
             print_debug_info("域名被拦截 %s\n", domain);
             int send_len = build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NAME_ERROR);
             sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            return;
+        } 
+
+        // 命中A记录，直接返回本地IP
+        if (is_a) {
+            print_debug_info("找到记录 %s -> %s\n", domain, record->ip);
+            int send_len = build_standard_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
+            sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            return;
         } else {
-            // 命中A记录，直接返回本地IP
-            if (is_a) {
-                print_debug_info("找到记录 %s -> %s\n", domain, record->ip);
-                int send_len = build_standard_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
-                sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            // 有A记录但收到AAAA查询，返回空应答
+            print_debug_info("本地表有A记录，对AAAA查询返回空应答: %s\n", domain);
+            int send_len = build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NO_ERROR);
+            sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            return;
+        }
+
+    } 
+    record = cache_find(&ctx->cache, domain, qtype);
+    if(record){
+
+        // 命中缓存，直接返回缓存的IP
+        if (is_a && record->type == DNS_TYPE_A) {
+            print_debug_info("缓存命中A记录 %s -> %s\n", domain, record->ip);
+            int send_len = build_standard_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
+            sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            return;
+        } else if (is_aaaa && record->type == DNS_TYPE_AAAA) {
+            print_debug_info("缓存命中AAAA记录 %s -> %s\n", domain, record->ip);
+            int send_len = build_ipv6_dns_response(response_buffer, query_buffer, question_section_len, record->ip);
+            sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+            return;
+        }
+    } 
+    // 未命中，转发到上游DNS服务器
+    print_debug_info("转发%s查询到上游DNS: %s\n", is_a ? "A" : "AAAA", domain);
+    forward_query_to_upstream(ctx, query_buffer, query_len, question_section_len, client_addr);
+}
+
+
+// ----------- 查询缓存 -----------
+void update_cache(DNSContext *ctx, uint8_t *response_buffer) {
+    // 从响应中解析域名和查询类型
+    char domain[256] = "";
+    int qname_len = parse_dns_name(response_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
+    DNSQuestion* question = (DNSQuestion*)(response_buffer + DNS_HEADER_SIZE + qname_len);
+    uint16_t qtype = ntohs(question->qtype);
+
+    if (qname_len > 0 && (qtype == DNS_TYPE_A || qtype == DNS_TYPE_AAAA)) {
+        // 解析IP
+        int ancount = ntohs(((DNSHeader*)response_buffer)->ancount);
+        if (ancount > 0) {
+            // 定位到第一个answer
+            int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
+            DNS_RR* rr = (DNS_RR*)(response_buffer + offset);
+
+            //更新对应类型的缓存
+            if (rr->type == htons(DNS_TYPE_A) && rr->rdlength == htons(4)) {
+                char ip[16];
+                inet_ntop(AF_INET, response_buffer + offset + sizeof(DNS_RR), ip, sizeof(ip));
+                cache_insert(&ctx->cache, domain, DNS_TYPE_A, ip);
+            } else if(rr->type == htons(DNS_TYPE_AAAA) && rr->rdlength == htons(16)){
+                char ip[46]; // IPv6地址字符串
+                inet_ntop(AF_INET6, response_buffer + offset + sizeof(DNS_RR), ip, sizeof(ip));
+                cache_insert(&ctx->cache, domain, DNS_TYPE_AAAA, ip);
             } else {
-                // 有A记录但收到AAAA查询，返回空应答
-                print_debug_info("本地表有A记录，对AAAA查询返回空应答: %s\n", domain);
-                int send_len = build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NO_ERROR);
-                sendto(ctx->sock, (char*)response_buffer, send_len, 0, (struct sockaddr*)&client_addr, sizeof(client_addr));
+                print_debug_info("未知类型或长度的资源记录: type=%u, rdlength=%u\n", ntohs(rr->type), ntohs(rr->rdlength));
             }
         }
-    } else {
-        // 未命中，转发到上游DNS服务器
-        print_debug_info("转发%s查询到上游DNS: %s\n", is_a ? "A" : "AAAA", domain);
-        forward_query_to_upstream(ctx, query_buffer, query_len, question_section_len, client_addr);
-    }
+    }  
 }
 
 /**
@@ -163,32 +214,11 @@ void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int res
     // 解析上游响应的ID，用于在转发表中查找对应的请求
     DNSHeader* header = (DNSHeader*)response_buffer;
     uint16_t resp_upstream_id = ntohs(header->id);
-    
     RelayEntry* entry = NULL;
     HASH_FIND(hh, ctx->relay_table, &resp_upstream_id, sizeof(uint16_t), entry);
 
     if (entry) {
-        // 找到对应的转发请求，恢复原始客户端ID并转发响应
-        // 解析域名（只处理A记录缓存）
-        char domain[256] = "";
-        int qname_len = parse_dns_name(response_buffer, DNS_HEADER_SIZE, domain, sizeof(domain));
-        DNSQuestion* question = (DNSQuestion*)(response_buffer + DNS_HEADER_SIZE + qname_len);
-        uint16_t qtype = ntohs(question->qtype);
-        if (qname_len > 0 && qtype == DNS_TYPE_A) {
-            // 只缓存A记录的正向解析
-            // 解析IP
-            int ancount = ntohs(((DNSHeader*)response_buffer)->ancount);
-            if (ancount > 0) {
-                // 定位到第一个answer
-                int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
-                DNS_RR* rr = (DNS_RR*)(response_buffer + offset);
-                if (rr->type == htons(DNS_TYPE_A) && rr->rdlength == htons(4)) {
-                    char ip[16];
-                    snprintf(ip, sizeof(ip), "%u.%u.%u.%u", rr->rdata[0], rr->rdata[1], rr->rdata[2], rr->rdata[3]);
-                    cache_insert(&ctx->cache, domain, ip);
-                }
-            }
-        }
+        update_cache(ctx, response_buffer); // 更新缓存
         // 找到对应的转发请求，恢复原始客户端ID并转发响应
         print_debug_info("收到上游响应，转发给客户端，upstream_id=%u, client_id=%u\n", resp_upstream_id, entry->client_id);
         header->id = htons(entry->client_id);
@@ -203,4 +233,7 @@ void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int res
         print_debug_info("未找到对应的RelayEntry, upstream_id=%u，丢弃响应\n", resp_upstream_id);
     }
 }
+
+
+
 

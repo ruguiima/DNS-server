@@ -1,4 +1,5 @@
 #include "cache.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -8,9 +9,12 @@ void cache_init(DNSCache *cache, int cap) {
     cache->table = NULL;
 }
 
-DNSRecord *cache_find(DNSCache *cache, const char *domain) {
+DNSRecord *cache_find(DNSCache *cache, const char *domain, 
+                      const uint16_t type) {
     DNSRecord *rec = NULL;
-    HASH_FIND_STR(cache->table, domain, rec);
+    char key[260];
+    snprintf(key, sizeof(key), "%s_%u", domain, type);
+    HASH_FIND_STR(cache->table, key, rec);
     if (rec) {
         // 命中则移到表尾
         HASH_DEL(cache->table, rec);
@@ -19,9 +23,12 @@ DNSRecord *cache_find(DNSCache *cache, const char *domain) {
     return rec;
 }
 
-void cache_insert(DNSCache *cache, const char *domain, const char *ip) {
+void cache_insert(DNSCache *cache, const char *domain, 
+                  const uint16_t type, const char *ip) {
     DNSRecord *rec = NULL;
-    HASH_FIND_STR(cache->table, domain, rec);
+    char key[260];
+    snprintf(key, sizeof(key), "%s_%u", domain, type);
+    HASH_FIND_STR(cache->table, key, rec);
     if (rec) {
         // 已存在则更新并移到表尾
         strncpy(rec->ip, ip, sizeof(rec->ip)-1);
@@ -38,7 +45,7 @@ void cache_insert(DNSCache *cache, const char *domain, const char *ip) {
         cache->size--;
     }
     rec = (DNSRecord*)malloc(sizeof(DNSRecord));
-    strncpy(rec->domain, domain, sizeof(rec->domain)-1);
+    strncpy(rec->domain, key, sizeof(rec->domain)-1);
     rec->domain[sizeof(rec->domain)-1] = '\0';
     strncpy(rec->ip, ip, sizeof(rec->ip)-1);
     rec->ip[sizeof(rec->ip)-1] = '\0';
