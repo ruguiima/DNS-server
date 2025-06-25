@@ -8,8 +8,6 @@
 
 #define MY_PORT 53
 #define UPSTREAM_DNS_IP "10.3.9.5"
-
-// 缓存配置常量
 #define CACHE_MAX_ENTRIES 256  // 最大缓存条目数
 
 // 增加全局退出标志
@@ -143,14 +141,6 @@ int main(int argc, char* argv[]) {
         if (ret == 0) {
             // 超时，无事件发生，检查并处理转发表超时请求
             handle_timed_out_requests(&context);
-
-            // 定期清理过期缓存
-            struct timeval now;
-            get_now(&now);
-            if (now.tv_sec - context.last_cache_cleanup.tv_sec >= CACHE_CLEANUP_INTERVAL) {
-                cache_cleanup_expired(context.cache);
-                context.last_cache_cleanup = now;
-            }
         }
 
         // 检查本地监听套接字是否有数据（来自客户端的查询）

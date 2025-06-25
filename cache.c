@@ -46,30 +46,15 @@ void cache_destroy(DNSCache *cache) {
 }
 
 // 生成缓存键（域名+查询类型）
-void cache_key_generate(char *key, const char *domain, uint16_t qtype) { 
+static inline void cache_key_generate(char *key, const char *domain, uint16_t qtype) { 
     snprintf(key, 270, "%s#%u", domain, qtype); 
-}
-
-//检查缓存条目是否过期
-int cache_is_expired(const CacheEntry *entry) {
-    struct timeval now;
-    get_now(&now);
-
-    return (now.tv_sec > entry->expire_time.tv_sec ||
-            (now.tv_sec == entry->expire_time.tv_sec && now.tv_usec > entry->expire_time.tv_usec));
 }
 
 //获取缓存条目剩余TTL
 uint32_t cache_get_remaining_ttl(const CacheEntry *entry) {
-    if (cache_is_expired(entry)) {
-        return 0;
-    }
-
     struct timeval now;
     get_now(&now);
-
-    long remaining = entry->expire_time.tv_sec - now.tv_sec;
-    return (uint32_t)(remaining > 0 ? remaining : 0);
+    return (uint32_t)(entry->expire_time.tv_sec - now.tv_sec);
 }
 
 /**
@@ -89,17 +74,18 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
     char key[270];
     cache_key_generate(key, domain, qtype);
 
-    // 检查是否已存在，如果存在则更新
     CacheEntry *existing;
     HASH_FIND_STR(cache->entries, key, existing);
 
     if (existing) {
-        // 更新现有条目
+        // 先删除再插入，保持LRU顺序
+        HASH_DEL(cache->entries, existing);
         strncpy(existing->ip, ip, sizeof(existing->ip) - 1);
         existing->ip[sizeof(existing->ip) - 1] = '\0';
         existing->ttl = ttl;
         get_now(&existing->created_time);
         existing->expire_time.tv_sec = existing->created_time.tv_sec + ttl;
+        HASH_ADD_STR(cache->entries, key, existing);
 
         print_debug_info("缓存更新：%s (%u) -> %s, TTL=%u秒\n", domain, qtype, ip, ttl);
         return 0;
@@ -107,7 +93,15 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
 
     // 检查缓存大小限制
     if (cache->stats.current_size >= cache->stats.max_size) {
-        cache_evict_lru(cache);
+            // 直接淘汰哈希表头部（最久未使用）
+            CacheEntry *oldest = cache->entries;
+            if (oldest) {
+                print_debug_info("LRU驱逐：%s\n", oldest->key);
+                HASH_DEL(cache->entries, oldest);
+                free(oldest);
+                cache->stats.current_size--;
+                cache->stats.evicted++;
+            }
     }
 
     // 创建新条目
@@ -117,8 +111,8 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
         return -1;
     }
 
-    strncpy(entry->domain, key, sizeof(entry->domain) - 1);
-    entry->domain[sizeof(entry->domain) - 1] = '\0';
+    strncpy(entry->key, key, sizeof(entry->key) - 1);
+    entry->key[sizeof(entry->key) - 1] = '\0';
     strncpy(entry->ip, ip, sizeof(entry->ip) - 1);
     entry->ip[sizeof(entry->ip) - 1] = '\0';
     entry->qtype = qtype;
@@ -127,7 +121,7 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
     get_now(&entry->created_time);
     entry->expire_time.tv_sec = entry->created_time.tv_sec + ttl;
 
-    HASH_ADD_STR(cache->entries, domain, entry);
+    HASH_ADD_STR(cache->entries, key, entry);
     cache->stats.current_size++;
 
     print_debug_info("缓存添加：%s (%u) -> %s, TTL=%u秒\n", domain, qtype, ip, ttl);
@@ -158,9 +152,9 @@ CacheEntry *cache_get(DNSCache *cache, const char *domain, uint16_t qtype) {
     }
 
     // 检查是否过期
-    if (cache_is_expired(entry)) {
+    uint32_t remaining = cache_get_remaining_ttl(entry);
+    if (remaining <= 0) {
         print_debug_info("缓存过期：%s (%u)\n", domain, qtype);
-        cache_remove(cache, domain, qtype);
         HASH_DEL(cache->entries, entry);
         free(entry);
         cache->stats.current_size--;
@@ -169,40 +163,15 @@ CacheEntry *cache_get(DNSCache *cache, const char *domain, uint16_t qtype) {
         return NULL;
     }
 
+    // 先删除再插入，保持LRU顺序
+    HASH_DEL(cache->entries, entry);
+    HASH_ADD_STR(cache->entries, key, entry);
+
     cache->stats.hits++;
-    uint32_t remaining = cache_get_remaining_ttl(entry);
+
     print_debug_info("缓存命中：%s (%u) -> %s, 剩余TTL=%u秒\n", domain, qtype, entry->ip, remaining);
 
     return entry;
-}
-
-/**
- * 从缓存删除条目
- * @param cache 缓存管理器
- * @param domain 域名
- * @param qtype 查询类型
- * @return 0成功，-1失败
- */
-int cache_remove(DNSCache *cache, const char *domain, uint16_t qtype) {
-    if (!cache || !domain) {
-        return -1;
-    }
-
-    char key[270];
-    cache_key_generate(key, domain, qtype);
-
-    CacheEntry *entry;
-    HASH_FIND_STR(cache->entries, key, entry);
-
-    if (entry) {
-        HASH_DEL(cache->entries, entry);
-        free(entry);
-        cache->stats.current_size--;
-        print_debug_info("缓存删除：%s (%u)\n", domain, qtype);
-        return 0;
-    }
-
-    return -1;
 }
 
 //清理过期的缓存条目
@@ -213,7 +182,7 @@ void cache_cleanup_expired(DNSCache *cache) {
     uint32_t expired_count = 0;
 
     HASH_ITER(hh, cache->entries, entry, tmp) {
-        if (cache_is_expired(entry)) {
+        if (cache_get_remaining_ttl(entry) <= 0) {
             HASH_DEL(cache->entries, entry);
             free(entry);
             cache->stats.current_size--;
@@ -227,38 +196,11 @@ void cache_cleanup_expired(DNSCache *cache) {
     }
 }
 
-//驱逐最老的缓存条目（简单LRU）
-void cache_evict_lru(DNSCache *cache) {
-    if (!cache || !cache->entries) return;
-
-    CacheEntry *oldest = NULL;
-    CacheEntry *entry, *tmp;
-
-    // 查找最老的条目（创建时间最早）
-    HASH_ITER(hh, cache->entries, entry, tmp) {
-        if (!oldest || entry->created_time.tv_sec < oldest->created_time.tv_sec ||
-            (entry->created_time.tv_sec == oldest->created_time.tv_sec &&
-             entry->created_time.tv_usec < oldest->created_time.tv_usec)) {
-            oldest = entry;
-        }
-    }
-
-    if (oldest) {
-        print_debug_info("LRU驱逐：%s\n", oldest->domain);
-        HASH_DEL(cache->entries, oldest);
-        free(oldest);
-        cache->stats.current_size--;
-        cache->stats.evicted++;
-    }
-}
-
 //计算缓存命中率
 double cache_hit_rate(const DNSCache *cache) {
     if (!cache) return 0.0;
-
     uint64_t total = cache->stats.hits + cache->stats.misses;
     if (total == 0) return 0.0;
-
     return (double)cache->stats.hits / (double)total;
 }
 

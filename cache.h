@@ -18,7 +18,7 @@
 
 // 缓存条目结构
 typedef struct cache_entry {
-    char domain[256];             // 域名（键）
+    char key[260];             // 域名 + 类型（键）
     char ip[46];                  // IP地址 (IPv4最大15字符, IPv6最大45字符)
     uint16_t qtype;               // 查询类型（A、AAAA等）
     uint32_t ttl;                 // 原始TTL值（秒）
@@ -50,12 +50,9 @@ void cache_destroy(DNSCache *cache);
 // 缓存操作
 int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *ip, uint32_t ttl);
 CacheEntry *cache_get(DNSCache *cache, const char *domain, uint16_t qtype);
-int cache_remove(DNSCache *cache, const char *domain, uint16_t qtype);
 
 // 缓存维护
 void cache_cleanup_expired(DNSCache *cache);
-void cache_evict_lru(DNSCache *cache);
-int cache_is_expired(const CacheEntry *entry);
 uint32_t cache_get_remaining_ttl(const CacheEntry *entry);
 
 // 缓存统计
@@ -63,6 +60,6 @@ void cache_print_stats(const DNSCache *cache);
 double cache_hit_rate(const DNSCache *cache);
 
 // 工具函数
-void cache_key_generate(char *key, const char *domain, uint16_t qtype);
+static inline void cache_key_generate(char *key, const char *domain, uint16_t qtype);
 
 #endif /* DNS_CACHE_H */

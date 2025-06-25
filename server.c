@@ -33,6 +33,10 @@ void handle_timed_out_requests(DNSContext *ctx) {
             free(entry);
         }
     }
+    if (now.tv_sec - ctx->last_cache_cleanup.tv_sec >= CACHE_CLEANUP_INTERVAL) {
+        cache_cleanup_expired(ctx->cache);
+        ctx->last_cache_cleanup = now;
+    }
 }
 
 /**
