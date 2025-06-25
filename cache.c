@@ -7,14 +7,7 @@
 #include "util.h"
 
 
-/**
- * 创建DNS缓存管理器
- * @param max_entries 最大缓存条目数
- * @param default_ttl 默认TTL（秒）
- * @param min_ttl 最小TTL（秒）
- * @param max_ttl 最大TTL（秒）
- * @return 缓存管理器指针，失败返回NULL
- */
+// 创建DNS缓存管理器
 DNSCache *cache_create(uint32_t max_entries) {
     DNSCache *cache = malloc(sizeof(DNSCache));
     if (!cache) {
@@ -85,9 +78,9 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
         HASH_DEL(cache->entries, existing);
         strncpy(existing->ip, ip, sizeof(existing->ip) - 1);
         existing->ip[sizeof(existing->ip) - 1] = '\0';
-        existing->ttl = ttl;
-        get_now(&existing->created_time);
-        existing->expire_time.tv_sec = existing->created_time.tv_sec + ttl;
+        struct timeval now;
+        get_now(&now);
+        existing->expire_time.tv_sec = now.tv_sec + ttl;
         HASH_ADD_STR(cache->entries, key, existing);
 
         print_debug_info("缓存更新：%s (%u) -> %s, TTL=%u秒\n", domain, qtype, ip, ttl);
@@ -119,10 +112,10 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
     strncpy(entry->ip, ip, sizeof(entry->ip) - 1);
     entry->ip[sizeof(entry->ip) - 1] = '\0';
     entry->qtype = qtype;
-    entry->ttl = ttl;
 
-    get_now(&entry->created_time);
-    entry->expire_time.tv_sec = entry->created_time.tv_sec + ttl;
+    struct timeval now;
+    get_now(&now);
+    entry->expire_time.tv_sec = now.tv_sec + ttl;
 
     HASH_ADD_STR(cache->entries, key, entry);
     cache->stats.current_size++;

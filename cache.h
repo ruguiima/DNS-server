@@ -21,8 +21,6 @@ typedef struct cache_entry {
     char key[260];             // 域名 + 类型（键）
     char ip[46];                  // IP地址 (IPv4最大15字符, IPv6最大45字符)
     uint16_t qtype;               // 查询类型（A、AAAA等）
-    uint32_t ttl;                 // 原始TTL值（秒）
-    struct timeval created_time;  // 创建时间
     struct timeval expire_time;   // 过期时间
     UT_hash_handle hh;            // uthash处理句柄
 } CacheEntry;

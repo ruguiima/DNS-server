@@ -6,10 +6,7 @@
 
 
 
-/**
- * @brief 处理超时的转发请求。
- * @param ctx 指向DNS服务器上下文的指针。
- */
+// 处理超时的转发请求。
 void handle_timed_out_requests(DNSContext *ctx) {
     struct timeval now;
     get_now(&now);
