@@ -21,3 +21,4 @@ Makefile
 *.lib
 *.exe
 *.out
+.clang-format
