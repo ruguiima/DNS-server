@@ -54,6 +54,9 @@ static inline void cache_key_generate(char *key, const char *domain, uint16_t qt
 uint32_t cache_get_remaining_ttl(const CacheEntry *entry) {
     struct timeval now;
     get_now(&now);
+    if (!entry || entry->expire_time.tv_sec <= now.tv_sec) {
+        return 0; // 已过期或无效条目
+    }
     return (uint32_t)(entry->expire_time.tv_sec - now.tv_sec);
 }
 

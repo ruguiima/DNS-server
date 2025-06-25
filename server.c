@@ -199,17 +199,18 @@ void update_cache(DNSContext *ctx, uint8_t *response_buffer) {
 
         uint16_t type = ntohs(rr->type);
         uint16_t rdlength = ntohs(rr->rdlength);
+        uint16_t ttl = ntohl(rr->ttl);
         const uint8_t *rdata = response_buffer + offset + rr_name_len + sizeof(DNS_RR);
 
         if (type == DNS_TYPE_A && rdlength == 4) {
             char ip[16];
             inet_ntop(AF_INET, rdata, ip, sizeof(ip));
-            cache_put(ctx->cache, q_domain, DNS_TYPE_A, ip, rr->ttl);
+            cache_put(ctx->cache, q_domain, DNS_TYPE_A, ip, ttl);
             return;
         } else if (type == DNS_TYPE_AAAA && rdlength == 16) {
             char ip[46];
             inet_ntop(AF_INET6, rdata, ip, sizeof(ip));
-            cache_put(ctx->cache, q_domain, DNS_TYPE_AAAA, ip, rr->ttl);
+            cache_put(ctx->cache, q_domain, DNS_TYPE_AAAA, ip, ttl);
             return;
         }
         print_debug_info("update_cache: 不支持的记录类型或长度不匹配，type=%u, rdlength=%u\n", type, rdlength);
