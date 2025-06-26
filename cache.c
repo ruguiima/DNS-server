@@ -6,7 +6,6 @@
 
 #include "util.h"
 
-
 // 创建DNS缓存管理器
 DNSCache *cache_create(uint32_t max_entries) {
     DNSCache *cache = malloc(sizeof(DNSCache));
@@ -19,7 +18,7 @@ DNSCache *cache_create(uint32_t max_entries) {
     cache->entries = NULL;
     cache->stats.max_size = max_entries;
 
-    print_debug_info("DNS缓存已创建：最大条目=%u", max_entries);
+    print_debug_info("DNS缓存已创建：最大条目=%u\n", max_entries);
     return cache;
 }
 
@@ -39,16 +38,16 @@ void cache_destroy(DNSCache *cache) {
 }
 
 // 生成缓存键（域名+查询类型）
-static inline void cache_key_generate(char *key, const char *domain, uint16_t qtype) { 
-    snprintf(key, 270, "%s#%u", domain, qtype); 
+static inline void cache_key_generate(char *key, const char *domain, uint16_t qtype) {
+    snprintf(key, 270, "%s#%u", domain, qtype);
 }
 
-//获取缓存条目剩余TTL
+// 获取缓存条目剩余TTL
 uint32_t cache_get_remaining_ttl(const CacheEntry *entry) {
     struct timeval now;
     get_now(&now);
     if (!entry || entry->expire_time.tv_sec <= now.tv_sec) {
-        return 0; // 已过期或无效条目
+        return 0;  // 已过期或无效条目
     }
     return (uint32_t)(entry->expire_time.tv_sec - now.tv_sec);
 }
@@ -89,15 +88,15 @@ int cache_put(DNSCache *cache, const char *domain, uint16_t qtype, const char *i
 
     // 检查缓存大小限制
     if (cache->stats.current_size >= cache->stats.max_size) {
-            // 直接淘汰哈希表头部（最久未使用）
-            CacheEntry *oldest = cache->entries;
-            if (oldest) {
-                print_debug_info("LRU驱逐：%s\n", oldest->key);
-                HASH_DEL(cache->entries, oldest);
-                free(oldest);
-                cache->stats.current_size--;
-                cache->stats.evicted++;
-            }
+        // 直接淘汰哈希表头部（最久未使用）
+        CacheEntry *oldest = cache->entries;
+        if (oldest) {
+            print_debug_info("LRU驱逐：%s\n", oldest->key);
+            HASH_DEL(cache->entries, oldest);
+            free(oldest);
+            cache->stats.current_size--;
+            cache->stats.evicted++;
+        }
     }
 
     // 创建新条目
@@ -170,7 +169,7 @@ CacheEntry *cache_get(DNSCache *cache, const char *domain, uint16_t qtype) {
     return entry;
 }
 
-//清理过期的缓存条目
+// 清理过期的缓存条目
 void cache_cleanup_expired(DNSCache *cache) {
     if (!cache) return;
 
@@ -192,7 +191,7 @@ void cache_cleanup_expired(DNSCache *cache) {
     }
 }
 
-//计算缓存命中率
+// 计算缓存命中率
 double cache_hit_rate(const DNSCache *cache) {
     if (!cache) return 0.0;
     uint64_t total = cache->stats.hits + cache->stats.misses;
@@ -200,7 +199,7 @@ double cache_hit_rate(const DNSCache *cache) {
     return (double)cache->stats.hits / (double)total;
 }
 
-//打印缓存统计信息
+// 打印缓存统计信息
 void cache_print_stats(const DNSCache *cache) {
     if (!cache) return;
 

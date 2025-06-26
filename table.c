@@ -1,12 +1,8 @@
 #include "table.h"
-
+#include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-
-// 调试信息输出函数声明
-void print_debug_info(const char *format, ...);
 
 // 加载DNS表，将dnsrelay.txt中的域名-IP映射读入哈希表
 int load_dns_table(const char *filename, DNSRecord **table) {
@@ -17,7 +13,7 @@ int load_dns_table(const char *filename, DNSRecord **table) {
     // 打开配置文件
     fp = fopen(filename, "r");
     if (!fp) {
-        print_debug_info("无法打开配置文件 %s\n", filename);
+        printf("无法打开配置文件 %s\n", filename);
         return -1;
     }
     *table = NULL;  // 初始化哈希表
