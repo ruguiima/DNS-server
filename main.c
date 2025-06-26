@@ -105,7 +105,8 @@ int main(int argc, char *argv[]) {
     }
 
     parse_command_line(argc, argv, upstream_dns_ip, sizeof(upstream_dns_ip), config_file, sizeof(config_file));
-    if(strcmp(upstream_dns_ip, "127.0.0.1") == 0) {
+    // 检查上游DNS服务器地址是否为本机
+    if (strcmp(upstream_dns_ip, "127.0.0.1") == 0 || strcmp(upstream_dns_ip, "localhost") == 0) {
         printf("错误：上游DNS服务器地址不能为本机");
         return 1;
     }
