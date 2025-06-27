@@ -5,12 +5,13 @@
 #include "table.h"
 #include "util.h"
 
-// 处理超时的转发请求。
+// 定时进行状态检查，检测超时。
 void handle_timed_out_requests(DNSContext *ctx) {
     struct timeval now;
     get_now(&now);
 
     RelayEntry *entry, *tmp;
+    // 逐个遍历转发请求检查应答是否超时
     HASH_ITER(hh, ctx->relay_table, entry, tmp) {
         long sec_diff = now.tv_sec - entry->timestamp.tv_sec;
         long usec_diff = now.tv_usec - entry->timestamp.tv_usec;
@@ -20,15 +21,19 @@ void handle_timed_out_requests(DNSContext *ctx) {
                              entry->upstream_id, entry->client_id);
 
             uint8_t timeout_buffer[MAX_DNS_PACKET_SIZE] = {0};
+            // 构造超时错误响应
             int send_len =
                 build_dns_error_response(timeout_buffer, entry->query, entry->question_len, DNS_RCODE_SERVER_FAILURE);
+            // 发送超时响应给客户端
             sendto(ctx->sock, (char *)timeout_buffer, send_len, 0, (struct sockaddr *)&entry->client_addr,
                    sizeof(entry->client_addr));
 
+            // 从转发表删除并释放内存
             HASH_DEL(ctx->relay_table, entry);
             free(entry);
         }
     }
+    // 定期清理缓存
     if (now.tv_sec - ctx->last_cache_cleanup.tv_sec >= CACHE_CLEANUP_INTERVAL) {
         cache_cleanup_expired(ctx->cache);
         ctx->last_cache_cleanup = now;
@@ -53,6 +58,7 @@ void forward_query_to_upstream(DNSContext *ctx, const uint8_t *query_buffer, int
 
     DNSHeader *header = (DNSHeader *)query_buffer;
 
+    // 填充ID映射表项
     entry->upstream_id = ++(ctx->upstream_id_counter);
     entry->client_id = ntohs(header->id);
     entry->client_addr = client_addr;
@@ -65,6 +71,7 @@ void forward_query_to_upstream(DNSContext *ctx, const uint8_t *query_buffer, int
     uint8_t forward_buffer[MAX_DNS_PACKET_SIZE];
     memcpy(forward_buffer, query_buffer, query_len);
     DNSHeader *forward_header = (DNSHeader *)forward_buffer;
+    // 替换ID为上游ID
     forward_header->id = htons(entry->upstream_id);
 
     // 未命中，转发到上游DNS服务器
@@ -81,7 +88,7 @@ void forward_query_to_upstream(DNSContext *ctx, const uint8_t *query_buffer, int
  * @param query_len 查询数据的长度。
  */
 void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_t *query_buffer, int query_len) {
-    char domain[256];                              // 将domain作为局部变量
+    char domain[256];
     uint8_t response_buffer[MAX_DNS_PACKET_SIZE];  // 用于发送响应的独立缓冲区
 
     // ----------- 基本校验 -----------
@@ -123,6 +130,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_
         print_debug_info("收到AAAA类查询: %s\n", domain);
     else {
         print_debug_info("收到非A/AAAA类型或非IN类查询: %s\n", domain);
+        // 构造未实现错误响应
         int send_len =
             build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NOT_IMPLEMENTED);
         sendto(ctx->sock, (char *)response_buffer, send_len, 0, (struct sockaddr *)&client_addr, sizeof(client_addr));
@@ -136,6 +144,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_
         // 命中本地表，判断是否为拦截（0.0.0.0）
         if (strcmp(record->ip, "0.0.0.0") == 0) {
             print_debug_info("域名被拦截 %s\n", domain);
+            // 构造Name Error响应
             int send_len =
                 build_dns_error_response(response_buffer, query_buffer, question_section_len, DNS_RCODE_NAME_ERROR);
             sendto(ctx->sock, (char *)response_buffer, send_len, 0, (struct sockaddr *)&client_addr,
@@ -178,6 +187,7 @@ void handle_client_query(DNSContext *ctx, struct sockaddr_in client_addr, uint8_
             return;
         }
     }
+    // 未命中本地表和缓存，转发到上游
     forward_query_to_upstream(ctx, query_buffer, query_len, question_section_len, client_addr);
 }
 
@@ -194,6 +204,7 @@ void update_cache(DNSContext *ctx, uint8_t *response_buffer) {
         return;
     }
     int offset = DNS_HEADER_SIZE + qname_len + sizeof(DNSQuestion);
+    // 遍历回答区域的资源记录
     for (int i = 0; i < ancount; i++) {
         char rr_domain[256] = "";
         int rr_name_len = parse_dns_name(response_buffer, offset, rr_domain, sizeof(rr_domain));
@@ -208,25 +219,31 @@ void update_cache(DNSContext *ctx, uint8_t *response_buffer) {
         uint16_t ttl = ntohl(rr->ttl);
         const uint8_t *rdata = response_buffer + offset + rr_name_len + sizeof(DNS_RR);
 
+        // 只缓存A和AAAA记录
         if (type == DNS_TYPE_A && rdlength == 4) {
             char ip[16];
             inet_ntop(AF_INET, rdata, ip, sizeof(ip));
             cache_put(ctx->cache, q_domain, DNS_TYPE_A, ip, ttl);
+            // 如果回答区域的域名和查询域名不同，说明查询域名是一个别名，也缓存回答区域的域名
             if (strcmp(q_domain, rr_domain) != 0) {
                 cache_put(ctx->cache, rr_domain, DNS_TYPE_A, ip, ttl);
             }
+            // cache添加成功则返回
             return;
         } else if (type == DNS_TYPE_AAAA && rdlength == 16) {
             char ip[46];
             inet_ntop(AF_INET6, rdata, ip, sizeof(ip));
             cache_put(ctx->cache, q_domain, DNS_TYPE_AAAA, ip, ttl);
+            // 同上
             if (strcmp(q_domain, rr_domain) != 0) {
                 cache_put(ctx->cache, rr_domain, DNS_TYPE_AAAA, ip, ttl);
             }
+            // cache添加成功则返回
             return;
         }
         print_debug_info("不支持的记录类型或长度不匹配，type=%u, rdlength=%u\n", type, rdlength);
-        offset += rr_name_len + sizeof(DNS_RR) + rdlength;  // 移动到下一个记录
+        // 跳到下一个资源记录
+        offset += rr_name_len + sizeof(DNS_RR) + rdlength;
     }
 }
 
@@ -255,6 +272,7 @@ void handle_upstream_response(DNSContext *ctx, uint8_t *response_buffer, int res
                          entry->client_id);
         update_cache(ctx, response_buffer);  // 更新缓存
         header->id = htons(entry->client_id);
+        // 发送响应给客户端
         sendto(ctx->sock, (char *)response_buffer, response_len, 0, (struct sockaddr *)&entry->client_addr,
                sizeof(entry->client_addr));
 

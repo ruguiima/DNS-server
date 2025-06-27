@@ -155,7 +155,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
         if (ret == 0) {
-            // 超时，无事件发生，检查并处理转发表超时请求
+            // 超时，无事件发生，检查并处理转发表和缓存超时请求
             handle_timed_out_requests(&context);
         }
 
