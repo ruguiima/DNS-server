@@ -55,8 +55,8 @@ dnsrelay [-d|-dd] [dns-server-ipaddr] [filename]
 ```
 - `-d`：启用调试模式 1（打印查询信息）。
 - `-dd`：启用调试模式 2（打印详细调试信息）
-- `-s DNS_SERVER_ADDRESS`：指定 DNS 服务器的 IP 地址。
-- `-f FILENAME`：指定包含静态 DNS 条目的文件名。
+- `dns-server-ipaddr`：指定 DNS 服务器的 IP 地址。
+- `filename`：指定包含静态 DNS 条目的文件名。
 
 您也可以使用`dnsrelay -h|--helper`命令查看参数详细说明。
 ## 鸣谢
